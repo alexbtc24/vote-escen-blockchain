@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Accès au Vote - ESCEN{% endblock %}
+
+{% block head_extra %}
+    <style>
+        .login-container { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 70vh;
+        }
+        .login-card { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 10px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); 
+            max-width: 400px; 
+            width: 90%; 
+            text-align: center; 
+            border-top: 5px solid #07845f; 
+        }
+        h1 { 
+            color: #07845f; 
+            margin-bottom: 20px; 
+            font-size: 1.8rem; 
+        }
+        .message { padding: 15px; margin-top: 20px; border-radius: 5px; font-weight: bold; }
+        .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card">
+        <h1 class="font-extrabold">Connexion pour Voter</h1>
+        <p class="text-sm text-gray-500 mb-6">Veuillez entrer votre ID numérique pour accéder à votre bulletin de vote.</p>
+
+        {% if error %}
+        <div class="message error mb-4" role="alert">
+            {{ error }}
+        </div>
+        {% endif %}
+        
+        <div id="message" class="message" style="display:none;"></div>
+
+        <form id="voterLoginForm">
+            <div class="mb-4">
+                <input type="text" id="voterId" name="voterId" required placeholder="Votre ID Numérique (ex: A1B2C3D4)"
+                       class="w-full p-3 border border-gray-300 rounded-lg text-center text-lg focus:ring-2 focus:ring-green-600 focus:border-green-600 uppercase">
+            </div>
+            <button type="submit" 
+                    class="w-full btn-primary bg-green-600 hover:bg-green-700 py-3 font-bold text-lg transition duration-150">
+                Accéder au Vote
+            </button>
+        </form>
+
+        <div class="mt-6 pt-4 border-t border-gray-100">
+            <p class="text-sm text-gray-600">
+                Si vous n'avez pas d'ID, veuillez vous <a href="{{ url_for('self_register_student_get') }}" class="text-indigo-600 hover:underline font-semibold">inscrire ici</a>.
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('voterLoginForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const voterId = document.getElementById('voterId').value.trim();
+        const messageDiv = document.getElementById('message');
+        messageDiv.style.display = 'block';
+        messageDiv.textContent = 'Vérification en cours...';
+        messageDiv.className = 'message';
+
+        fetch('/api/voter/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id_numerique: voterId })
+        })
+        .then(async response => {
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Accès refusé.');
+            }
+            return data;
+        })
+        .then(data => {
+            messageDiv.textContent = 'Accès accordé. Redirection...';
+            messageDiv.className = 'message success';
+            // Redirection vers la page de vote
+            window.location.href = data.redirect_url; 
+        })
+        .catch(error => {
+            messageDiv.textContent = 'Échec: ' + error.message;
+            messageDiv.className = 'message error';
+        });
+    });
+</script>
+{% endblock %}

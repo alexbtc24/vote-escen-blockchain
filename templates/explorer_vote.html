@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}Explorateur Blockchain Vote - ESCEN{% endblock %}
+
+{% block head_extra %}
+    <style>
+        .container-explorer { max-width: 1200px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-top: 5px solid theme('colors.escen-primary'); }
+        .h1-explorer { color: theme('colors.escen-dark'); border-bottom: 2px solid theme('colors.escen-primary'); padding-bottom: 10px; margin-bottom: 20px; font-size: 1.8rem; font-weight: 800; }
+        .blockchain-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 0.85rem; }
+        .blockchain-table th, .blockchain-table td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #dee2e6; }
+        .blockchain-table th { background-color: theme('colors.gray.100'); color: theme('colors.escen-dark'); font-weight: 700; }
+        .index-badge { background-color: theme('colors.escen-primary'); color: white; padding: 4px 8px; border-radius: 4px; font-weight: 700; }
+        .hash-short { font-family: monospace; cursor: pointer; color: #4f46e5; }
+        .hash-short:hover { text-decoration: underline; }
+        .action-type { font-weight: bold; }
+        .timestamp { color: #6b7280; font-size: 0.8rem; }
+        .data-preview {
+            max-width: 250px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: block;
+        }
+
+        /* Styles pour la modale */
+        .modal {
+            display: none; /* Masqué par défaut */
+            position: fixed;
+            z-index: 1000; 
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.6); /* Fond semi-transparent */
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background-color: #fefefe;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            max-width: 80%;
+            max-height: 80%;
+            overflow-y: auto;
+        }
+        .close-btn {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close-btn:hover,
+        .close-btn:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        #block-details {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: monospace;
+            background-color: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            max-height: 500px;
+            overflow-y: scroll;
+        }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="container-explorer">
+    <h1 class="h1-explorer">Explorateur de la Chaîne de Vote</h1>
+    <p class="text-gray-600 mb-6">Visualisez chaque bloc de la chaîne pour vérifier l'intégrité et l'ordre des transactions (votes, mises à jour, etc.).</p>
+
+    <div class="overflow-x-auto card">
+        <table class="blockchain-table">
+            <thead>
+                <tr>
+                    <th>Index</th>
+                    <th>Date / Heure (UTC)</th>
+                    <th>Preuve</th>
+                    <th>Type d'Action</th>
+                    <th>Données (Payload)</th>
+                    <th>Hash Précédent</th>
+                    <th>Hash du Bloc</th>
+                </tr>
+            </thead>
+            <tbody id="blocks-list">
+                </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="block-modal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="document.getElementById('block-modal').style.display='none'">&times;</span>
+        <h2 class="text-xl font-bold mb-4">Détails Complets du Bloc</h2>
+        <pre id="block-details"></pre>
+    </div>
+</div>
+
+<script>
+    const blockchain_chain = JSON.parse('{{ blockchain_chain | tojson | safe }}');
+
+    function getPayloadPreview(block) {
+        // Logique d'affichage des données dans le tableau
+        const payload = block.payload;
+        const type = block.type;
+
+        if (type === 'VOTE' && Array.isArray(payload) && payload.length > 0) {
+            // Après anonymisation côté serveur, le payload contient "status": "VOTE ENREGISTRÉ"
+            return `Vote(s) - ${payload.length} | Status: ${payload[0].status}`;
+        } else if (type === 'GENESIS') {
+            return payload.msg || 'Bloc initial.';
+        } else if (type === 'CANDIDATE_REGISTERED' && payload.nom) {
+            return `Candidat: ${payload.nom} (ID: ${payload.id.substring(0, 8)}...)`;
+        } else if (type === 'CANDIDATE_VALIDATED' && payload.nom) {
+            return `Validation: ${payload.nom} (ID: ${payload.id.substring(0, 8)}...)`;
+        } else if (type === 'VOTER_REGISTERED' && payload.id_numerique) {
+            // Après anonymisation côté serveur, affiche l'aperçu tronqué de l'ID
+            return `Inscription Votant - ${payload.id_numerique}`;
+        } else if (type === 'WHITELIST_UPDATE' && payload.count !== undefined) {
+            return `Liste Éligibilité MàJ. (${payload.count} entrées)`;
+        } else if (type === 'ELECTION_STATUS_CHANGE' && payload.status) {
+            return `Statut Élection: ${payload.status}`;
+        }
+        
+        // Si le payload est une simple chaîne ou autre, afficher les 30 premiers caractères
+        if (typeof payload === 'string') return payload.substring(0, 30) + (payload.length > 30 ? '...' : '');
+        // Sinon, une représentation JSON abrégée
+        return JSON.stringify(payload).substring(0, 30) + '...';
+    }
+
+    function loadBlockchain() {
+        const blocksList = document.getElementById('blocks-list');
+        blocksList.innerHTML = ''; // Nettoyer avant d'insérer
+
+        try {
+            // Itérer sur la chaîne inversée pour afficher les blocs les plus récents en premier
+            const reversedChain = [...blockchain_chain].reverse(); 
+
+            for (const block of reversedChain) {
+                const date = new Date(block.timestamp);
+                // Formatage plus lisible
+                const formattedDate = date.toLocaleDateString('fr-FR');
+                const formattedTime = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+                const type = block.type;
+                const preview = getPayloadPreview(block);
+                
+                // Le bloc complet est encodé en base64 pour être passé à la modale
+                const encodedBlock = btoa(JSON.stringify(block)); 
+
+                const row = blocksList.insertRow();
+                row.innerHTML = `
+                    <td><span class="index-badge">${block.index}</span></td>
+                    <td><span class="timestamp">${formattedTime} UTC</span><br><span class="timestamp">${formattedDate}</span></td>
+                    <td>${block.proof}</td>
+                    <td><span class="action-type">${type}</span></td>
+                    <td><span class="data-preview">${preview}</span></td>
+                    <td><span class="hash-short" title="${block.previous_hash}">${block.previous_hash.substring(0, 10)}...</span></td>
+                    <td><span class="hash-short" onclick="displayBlockDetails('${encodedBlock}')" title="${block.hash}">${block.hash.substring(0, 10)}...</span></td>
+                `;
+            }
+
+        } catch (error) {
+            blocksList.innerHTML = `<tr><td colspan="7" style="color:red; text-align: center;">Erreur de chargement de la chaîne (JSON invalide ?): ${error.message}</td></tr>`;
+            console.error("Erreur de l'explorateur:", error);
+        }
+    }
+    
+    window.displayBlockDetails = function(encodedBlock) {
+        // Décodage du bloc
+        const decodedBlock = atob(encodedBlock);
+        
+        // Tentative de formattage JSON
+        let blockDetailsText;
+        try {
+             blockDetailsText = JSON.stringify(JSON.parse(decodedBlock), null, 4);
+        } catch (e) {
+             // Si JSON invalide (ce qui ne devrait pas arriver ici), afficher le texte brut
+             blockDetailsText = decodedBlock; 
+        }
+
+        const blockDetailsPre = document.getElementById('block-details');
+        blockDetailsPre.textContent = blockDetailsText;
+        document.getElementById('block-modal').style.display = 'flex';
+    }
+
+    loadBlockchain();
+</script>
+{% endblock %}

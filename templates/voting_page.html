@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}Bulletin de Vote - ESCEN{% endblock %}
+
+{% block head_extra %}
+    <style>
+        .container-vote { max-width: 1000px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border-top: 5px solid #07845f; }
+        .h1-vote { color: #07845f; border-bottom: 2px solid #e9ecef; padding-bottom: 10px; margin-bottom: 30px; }
+        .candidate-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; }
+        .candidate-card { border: 2px solid #ddd; padding: 20px; border-radius: 8px; transition: all 0.3s; cursor: pointer; position: relative; }
+        .candidate-card:hover { border-color: #07845f; box-shadow: 0 0 10px rgba(7, 132, 95, 0.5); }
+        .candidate-card input[type="radio"] { position: absolute; top: 10px; right: 10px; width: 20px; height: 20px; z-index: 10; cursor: pointer; }
+        .selected-card { border-color: #07845f; background-color: #e9fff0; box-shadow: 0 0 15px rgba(7, 132, 95, 0.7); }
+        .voter-id-display { font-size: 0.9rem; color: #555; text-align: center; margin-bottom: 20px; }
+        .message-box { padding: 15px; margin-top: 30px; border-radius: 5px; font-weight: bold; text-align: center; border: 1px solid; display: none; }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="container-vote">
+    <h1 class="h1-vote text-3xl font-extrabold">Bulletin de Vote Électronique</h1>
+    
+    <div class="voter-id-display">
+        Vous votez avec l'ID Numérique: <strong class="text-lg text-indigo-600">{{ voter_id }}</strong>
+        <p class="text-sm text-red-500 mt-1">Sélectionnez **un seul** candidat ci-dessous.</p>
+    </div>
+
+    <form id="voteForm">
+        <input type="hidden" id="voterIdHidden" name="voter_id" value="{{ voter_id }}">
+        
+        <div class="candidate-grid">
+            
+            {% for candidate in candidates %}
+            <div class="candidate-card" data-candidate-id="{{ candidate.id }}">
+                <input type="radio" name="candidate_id" value="{{ candidate.id }}" id="cand_{{ candidate.id }}" required>
+                
+                <label for="cand_{{ candidate.id }}" class="block cursor-pointer p-4 -m-4">
+                    <div class="flex items-center space-x-4">
+                        <img src="{{ candidate.image_url }}" alt="{{ candidate.prenom }}" class="w-16 h-16 rounded-full object-cover border-2 border-gray-200">
+                        <div class="flex-grow">
+                            <h2 class="text-xl font-bold text-gray-900">{{ candidate.prenom }} {{ candidate.nom }}</h2>
+                            <p class="text-sm text-gray-600 font-semibold">{{ candidate.parcours }}</p>
+                        </div>
+                    </div>
+                    <div class="mt-4 border-t pt-4">
+                        <p class="italic text-gray-700">"{{ candidate.slogan }}"</p>
+                    </div>
+                </label>
+            </div>
+            {% endfor %}
+
+        </div>
+
+        <div class="mt-8 text-center">
+            <button type="submit" id="submitVoteButton" 
+                    class="btn-primary bg-indigo-600 hover:bg-indigo-700 py-3 px-8 text-xl font-bold transition duration-150 rounded-full">
+                Voter et Enregistrer sur la Blockchain
+            </button>
+        </div>
+    </form>
+
+    <div id="messageBox" class="message-box" style="display:none;"></div>
+</div>
+
+<script>
+    // Ajout de la classe "selected-card"
+    document.querySelectorAll('.candidate-card').forEach(card => {
+        const radio = card.querySelector('input[type="radio"]');
+        
+        // Initial state
+        if (radio.checked) {
+            card.classList.add('selected-card');
+        }
+
+        // Click handler
+        radio.addEventListener('change', () => {
+            // Remove from all
+            document.querySelectorAll('.candidate-card').forEach(c => c.classList.remove('selected-card'));
+            // Add to selected
+            if (radio.checked) {
+                card.classList.add('selected-card');
+            }
+        });
+    });
+
+    document.getElementById('voteForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const form = e.target;
+        const voterId = document.getElementById('voterIdHidden').value;
+        const selectedCandidate = form.querySelector('input[name="candidate_id"]:checked');
+        const messageDiv = document.getElementById('messageBox');
+        const submitButton = document.getElementById('submitVoteButton');
+
+        if (!selectedCandidate) {
+            messageDiv.style.display = 'block';
+            messageDiv.style.color = '#721c24';
+            messageDiv.textContent = 'Veuillez sélectionner un candidat.';
+            return;
+        }
+
+        const candidateId = selectedCandidate.value;
+        
+        submitButton.disabled = true;
+        submitButton.textContent = 'Envoi du vote...';
+        
+        messageDiv.style.display = 'block';
+        messageDiv.style.backgroundColor = '#d1ecf1';
+        messageDiv.style.borderColor = '#bee5eb';
+        messageDiv.style.color = '#004085';
+        messageDiv.textContent = 'Connexion à la Blockchain en cours. Veuillez patienter.';
+
+
+        fetch('/api/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ voter_id: voterId, candidate_id: candidateId })
+        })
+        .then(async response => {
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Échec du processus de vote.');
+            }
+            return data;
+        })
+        .then(data => {
+            messageDiv.style.backgroundColor = '#d4edda';
+            messageDiv.style.borderColor = '#c3e6cb';
+            messageDiv.style.color = '#155724';
+            messageDiv.innerHTML = `
+                **VOTE ENREGISTRÉ AVEC SUCCÈS !** <br>Votre vote est maintenant le bloc **#${data.block_index}** de la chaîne.
+                <br>Redirection vers les résultats...
+            `;
+            // Désactivation complète après le vote
+            form.style.pointerEvents = 'none'; 
+            setTimeout(() => {
+                window.location.href = '/results';
+            }, 3000);
+        })
+        .catch(error => {
+            submitButton.disabled = false;
+            submitButton.textContent = 'Voter et Enregistrer sur la Blockchain';
+            messageDiv.style.backgroundColor = '#f8d7da';
+            messageDiv.style.borderColor = '#f5c6cb';
+            messageDiv.style.color = '#721c24';
+            messageDiv.textContent = 'Erreur lors du vote: ' + error.message + '. Contactez l\'administrateur.';
+            
+        });
+    });
+</script>
+{% endblock %}

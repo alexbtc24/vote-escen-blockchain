@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block title %}Auto-Inscription Candidat - Vote ESCEN{% endblock %}
+
+{% block head_extra %}
+    <style>
+        .form-container { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 70vh; 
+        }
+        .form-card { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 10px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); 
+            max-width: 800px; 
+            width: 90%; 
+            border-top: 5px solid #007bff; /* Couleur accent bleue pour Candidat */
+        }
+        h1 { 
+            color: #007bff; 
+            margin-bottom: 20px; 
+            font-size: 1.8rem; 
+            border-bottom: 1px solid #eee; 
+            padding-bottom: 10px; 
+        }
+        .message { padding: 15px; margin-top: 20px; border-radius: 5px; font-weight: bold; display: none; }
+        .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="form-container">
+    <div class="form-card">
+        <h1 class="text-center font-extrabold">Formulaire de Candidature</h1>
+        
+        <div id="status-message">
+            {% if message %}
+            <div class="message error" style="display: block; background-color: #fff3cd; color: #856404; border-color: #ffeeba;">
+                {{ message }}
+            </div>
+            {% endif %}
+        </div>
+
+        <form id="candidateRegistrationForm" enctype="multipart/form-data">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="mb-4">
+                    <label for="nom" class="block text-gray-700 font-semibold mb-2">Nom</label>
+                    <input type="text" id="nom" name="nom" required 
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="mb-4">
+                    <label for="prenom" class="block text-gray-700 font-semibold mb-2">Prénom</label>
+                    <input type="text" id="prenom" name="prenom" required 
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+            </div>
+            
+            <div class="mb-4">
+                <label for="parcours" class="block text-gray-700 font-semibold mb-2">Parcours (Ex: M1 WebDev, B3 Marketing)</label>
+                <input type="text" id="parcours" name="parcours" required 
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+
+            <div class="mb-4">
+                <label for="slogan" class="block text-gray-700 font-semibold mb-2">Slogan (Maximum 100 mots)</label>
+                <textarea id="slogan" name="slogan" rows="2" required 
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                <p id="slogan-word-count" class="text-sm text-gray-500 mt-1 text-right">0 / 100 mots</p>
+            </div>
+
+            <div class="mb-4">
+                <label for="programme" class="block text-gray-700 font-semibold mb-2">Programme / Objectifs (Minimum 300 mots)</label>
+                <textarea id="programme" name="programme" rows="6" required 
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                <p id="programme-word-count" class="text-sm text-gray-500 mt-1 text-right">0 mots (Min: 300)</p>
+            </div>
+            
+            <div class="mb-6">
+                <label for="image" class="block text-gray-700 font-semibold mb-2">Photo de Candidat (PNG, JPG, JPEG)</label>
+                <input type="file" id="image" name="image" required accept="image/png, image/jpeg"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+
+            <div class="flex items-center justify-between">
+                <button type="submit" id="submitBtn"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-300" disabled>
+                    Soumettre la Candidature
+                </button>
+            </div>
+            
+            <div id="message" class="message mt-4" style="display:none;"></div>
+        </form>
+    </div>
+</div>
+
+<script>
+    // Fonction utilitaire pour compter les mots
+    function countWords(text) {
+        // Supprime les espaces inutiles au début/fin, puis divise par les espaces (pour exclure les espaces multiples)
+        const trimmed = text.trim();
+        if (trimmed === '') {
+            return 0;
+        }
+        return trimmed.split(/\s+/).length;
+    }
+
+    // Gestion de la validation du Slogan (Max 100 mots)
+    document.getElementById('slogan').addEventListener('input', function() {
+        const wordCount = countWords(this.value);
+        const countDisplay = document.getElementById('slogan-word-count');
+
+        countDisplay.textContent = `${wordCount} / 100 mots`;
+
+        if (wordCount > 100) {
+            countDisplay.classList.add('text-red-600');
+            this.setCustomValidity("Le slogan ne doit pas dépasser 100 mots."); 
+        } else {
+            countDisplay.classList.remove('text-red-600');
+            this.setCustomValidity(""); 
+        }
+        validateForm();
+    });
+
+    // Gestion de la validation du Programme (Min 300 mots)
+    document.getElementById('programme').addEventListener('input', function() {
+        const wordCount = countWords(this.value);
+        const countDisplay = document.getElementById('programme-word-count');
+
+        countDisplay.textContent = `${wordCount} mots (Min: 300)`;
+
+        if (wordCount < 300) {
+            countDisplay.classList.add('text-red-600');
+            this.setCustomValidity("Le programme doit contenir au moins 300 mots."); 
+        } else {
+            countDisplay.classList.remove('text-red-600');
+            this.setCustomValidity(""); 
+        }
+        validateForm();
+    });
+
+    // Fonction de validation globale (vérifie si les deux champs sont valides pour activer le bouton)
+    function validateForm() {
+        const sloganInput = document.getElementById('slogan');
+        const programmeInput = document.getElementById('programme');
+        const submitBtn = document.getElementById('submitBtn');
+        
+        const sloganValid = countWords(sloganInput.value) <= 100 && countWords(sloganInput.value) > 0;
+        const programmeValid = countWords(programmeInput.value) >= 300;
+        
+        // On vérifie aussi que les autres champs requis sont remplis
+        const otherFieldsValid = document.getElementById('nom').value.trim() !== '' &&
+                                 document.getElementById('prenom').value.trim() !== '' &&
+                                 document.getElementById('parcours').value.trim() !== '' &&
+                                 document.getElementById('image').files.length > 0; // Vérification de la présence d'un fichier
+
+        if (sloganValid && programmeValid && otherFieldsValid) {
+            submitBtn.disabled = false;
+        } else {
+            submitBtn.disabled = true;
+        }
+    }
+    
+    // Appel initial pour désactiver le bouton au chargement et surveiller les autres champs
+    document.addEventListener('DOMContentLoaded', () => {
+        validateForm();
+        // Ajout d'écouteurs d'événements pour les autres champs pour une réactivité immédiate
+        ['nom', 'prenom', 'parcours', 'image'].forEach(id => {
+            document.getElementById(id).addEventListener('input', validateForm);
+        });
+    });
+
+
+    document.getElementById('candidateRegistrationForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const form = e.target;
+        const formData = new FormData(form);
+        const messageDiv = document.getElementById('message');
+        
+        // Validation finale côté client avant l'envoi
+        if (countWords(formData.get('slogan')) > 100 || countWords(formData.get('programme')) < 300) {
+            messageDiv.className = 'message error';
+            messageDiv.textContent = 'Erreur de validation: Veuillez respecter la limite de mots pour le Slogan (max 100) et le Programme (min 300).';
+            messageDiv.style.display = 'block';
+            return;
+        }
+
+        messageDiv.style.display = 'block';
+        messageDiv.className = 'message';
+        messageDiv.textContent = 'Vérification et enregistrement de la candidature en cours...';
+        
+        // Envoi du formulaire avec le fichier
+        fetch('/api/candidate/self_register', {
+            method: 'POST',
+            body: formData
+        })
+        .then(async response => {
+            const responseData = await response.json();
+            if (!response.ok) throw new Error(responseData.error || "Échec de l'enregistrement de la candidature.");
+            return responseData;
+        })
+        .then(data => {
+            messageDiv.className = 'message success';
+            messageDiv.innerHTML = `
+                **CANDIDATURE ENREGISTRÉE AVEC SUCCÈS !**
+                <br>Votre profil est en attente de validation par l'administrateur.
+                <br>ID Candidat: <strong style="color: #007bff;">${data.candidate_id}</strong>
+            `;
+            form.reset();
+            // Assurer que le compteur et le bouton sont réinitialisés
+            document.getElementById('slogan-word-count').textContent = '0 / 100 mots';
+            document.getElementById('programme-word-count').textContent = '0 mots (Min: 300)';
+            validateForm(); // Désactive le bouton
+        })
+        .catch(error => {
+            messageDiv.className = 'message error';
+            messageDiv.textContent = 'Erreur: ' + error.message;
+        });
+    });
+</script>
+{% endblock %}

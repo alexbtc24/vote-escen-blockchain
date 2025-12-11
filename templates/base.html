@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Système de Vote Électronique{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Définitions des couleurs ESCEN pour Tailwind */
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'escen-primary': '#07845f', /* Couleur principale ESCEN (Vert foncé) */
+                        'escen-dark': '#01b4d5', /* Couleur de la barre de navigation */
+                        'escen-secondary': '#01b4d5', /* NOUVELLE COULEUR SECONDAIRE (Cyan Professionnel pour les accents) */
+                    }
+                }
+            }
+        }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        
+        /* FOND DE PAGE (GRIS TRÈS CLAIR MAINTENU, Assurons que le reste est visible) */
+        body { font-family: 'Inter', sans-serif; background-color: #FFFFFF; } 
+        
+        .card { background-color: white; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1); }
+        
+        /* CORRECTION : Utilisation de la nouvelle couleur secondaire pour le bouton primaire */
+        .btn-primary { 
+            background-color: #00a7c4; /* Cyan Professionnel */
+            color: white; 
+            padding: 0.5rem 1rem; 
+            border-radius: 0.375rem; 
+            transition: background-color 0.2s; 
+        }
+        .btn-primary:hover { 
+            background-color: #008fa6; /* Hover plus foncé */
+        }
+        
+        .escen-primary { color: #07845f; }
+        .border-escen-primary { border-color: #07845f; }
+        
+        /* Logo avec fond blanc sur barre de navigation foncée (inchangé) */
+        .nav-logo-img { 
+            height: 35px; 
+            width: auto; 
+            background-color: white; /* Fond blanc appliqué directement sur l'image */
+            padding: 4px; 
+            border-radius: 4px;
+        }
+    </style>
+    {% block head_extra %}{% endblock %}
+</head>
+<body class="flex flex-col min-h-screen">
+    <header class="bg-[#202a50] text-white p-4 shadow-md sticky top-0 z-50">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center">
+                <img src="{{ url_for('static', filename='images/escen_logo.png') }}" 
+                     alt="ESCEN Logo"
+                     class="nav-logo-img mr-3"> 
+                
+                <h1 class="text-2xl font-bold">ESCEN Vote</h1>
+            </div>
+            
+            <nav>
+                <a href="{{ url_for('index') }}" class="px-3 hover:text-black">Accueil</a>
+                <a href="{{ url_for('results') }}" class="px-3 hover:text-blue-300">Résultats</a>
+                <a href="{{ url_for('voter_login') }}" class="px-3 hover:text-blue-300">Vote</a>
+                <a href="{{ url_for('explorer') }}" class="px-3 hover:text-blue-300">Blockchain</a>
+                
+                <a href="{{ url_for('self_register_candidate_get') }}" class="px-3 hover:text-blue-300">Candidature</a>
+                
+                {% if session.get('admin_logged_in') %}
+                    <a href="{{ url_for('admin_dashboard') }}" class="px-3 text-yellow-300 hover:text-yellow-500">Admin</a>
+                    <a href="{{ url_for('admin_logout') }}" class="px-3 hover:text-red-400">Déconnexion</a>
+                {% else %}
+                    <a href="{{ url_for('admin_login') }}" class="px-3 hover:text-blue-300">Connexion Admin</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+
+    <main class="flex-grow container mx-auto px-4 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="bg-gray-100 text-gray-600 p-4 mt-auto">
+        <div class="container mx-auto text-center">
+            <p>&copy; {{ datetime.now().year }} Système de Vote Électronique ESCEN. Propulsé par la Blockchain.</p>
+        </div>
+    </footer>
+</body>
+</html>

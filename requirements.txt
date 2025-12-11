@@ -1,0 +1,7 @@
+# Contenu du fichier requirements.txt
+Flask
+gunicorn              # Serveur de production pour le déploiement
+pandas
+openpyxl
+werkzeug
+psycopg2-binary       # Pilote pour communiquer avec la base de données PostgreSQL

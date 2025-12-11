@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Auto-Inscription Étudiant - Vote ESCEN{% endblock %}
+
+{% block head_extra %}
+    <style>
+        .form-container { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 70vh;
+        }
+        .form-card { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 10px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); 
+            max-width: 600px; 
+            width: 90%; 
+            border-top: 5px solid #07845f; /* Couleur accent ESCEN */
+        }
+        h1 { 
+            color: #07845f; 
+            margin-bottom: 20px; 
+            font-size: 1.8rem; 
+            border-bottom: 1px solid #eee; 
+            padding-bottom: 10px; 
+        }
+        .message { padding: 15px; margin-top: 20px; border-radius: 5px; font-weight: bold; display: none; }
+        .message.success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .message.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+{% endblock %}
+
+{% block content %}
+<div class="form-container">
+    <div class="form-card">
+        <h1 class="text-center">Inscription pour Obtenir l'ID de Vote</h1>
+        <p class="text-gray-600 text-center mb-6">Vous devez entrer votre **Nom, Prénom et Parcours EXACTS** pour vérifier votre éligibilité.</p>
+
+        <form id="studentRegistrationForm">
+            <div class="mb-4">
+                <label for="nom" class="block text-gray-700 font-bold mb-2">Nom</label>
+                <input type="text" id="nom" name="nom" required 
+                       class="w-full p-3 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500" placeholder="Ex: DUBOIS">
+            </div>
+            <div class="mb-4">
+                <label for="prenom" class="block text-gray-700 font-bold mb-2">Prénom</label>
+                <input type="text" id="prenom" name="prenom" required 
+                       class="w-full p-3 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500" placeholder="Ex: ANTOINE">
+            </div>
+            <div class="mb-6">
+                <label for="parcours" class="block text-gray-700 font-bold mb-2">Parcours/Filière</label>
+                <input type="text" id="parcours" name="parcours" required 
+                       class="w-full p-3 border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500" placeholder="Ex: E-BUSINESS M1">
+            </div>
+            
+            <button type="submit" 
+                    class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded transition duration-200">
+                VÉRIFIER ET GÉNÉRER MON ID
+            </button>
+        </form>
+
+        <div id="message" class="message"></div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('studentRegistrationForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const form = e.target;
+        const nom = document.getElementById('nom').value.trim();
+        const prenom = document.getElementById('prenom').value.trim();
+        const parcours = document.getElementById('parcours').value.trim(); // NOUVEAU
+        const messageDiv = document.getElementById('message');
+        
+        messageDiv.style.display = 'block';
+        messageDiv.className = 'message';
+        messageDiv.textContent = 'Vérification de l\'éligibilité et génération de l\'ID en cours...';
+        
+        fetch('/api/student/self_register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nom: nom, prenom: prenom, parcours: parcours }) // ENVOI DES 3 CHAMPS
+        })
+        .then(async response => {
+            const responseData = await response.json();
+            if (!response.ok) throw new Error(responseData.error || "Échec de l'inscription.");
+            return responseData;
+        })
+        .then(data => {
+            messageDiv.className = 'message success';
+            messageDiv.innerHTML = `
+                **FÉLICITATIONS !** Votre ID de vote a été créé.
+                <br>Votre ID Numérique est : <strong style="font-size:1.4rem; color: #07845f;">${data.id_numerique}</strong>
+                <br>Il est **CRUCIAL** de noter cet ID.
+                <br><br>Vous pouvez maintenant voter sur la page <a href="/voter_login" class="text-blue-700 underline font-bold">Accès au Vote</a>.
+            `;
+            form.style.display = 'none';
+        })
+        .catch(error => {
+            messageDiv.className = 'message error';
+            messageDiv.textContent = 'Erreur: ' + error.message;
+        });
+    });
+</script>
+{% endblock %}

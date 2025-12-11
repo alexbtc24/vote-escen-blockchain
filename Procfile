@@ -1,0 +1,1 @@
+web: gunicorn serveur_vote:app

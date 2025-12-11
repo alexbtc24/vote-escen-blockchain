@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Accueil - Vote ESCEN{% endblock %}
+
+{% block content %}
+<div class="text-center mb-10">
+    <h1 class="text-5xl font-extrabold text-gray-900 mb-4">Système de Vote Électronique ESCEN</h1>
+    <p class="text-xl text-gray-600">Bienvenue sur la plateforme sécurisée de vote basée sur la technologie Blockchain.</p>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+    
+    <a href="{{ url_for('self_register_student_get') }}" class="block card p-6 hover:shadow-lg transition duration-300">
+        <h2 class="text-2xl font-semibold mb-2 text-escen-primary">1. S'inscrire au Vote</h2>
+        <p class="text-gray-600">Vérifiez votre éligibilité et obtenez votre ID numérique unique pour voter.</p>
+    </a>
+
+    <a href="{{ url_for('voter_login') }}" class="block card p-6 hover:shadow-lg transition duration-300">
+        <h2 class="text-2xl font-semibold mb-2 text-indigo-600">2. Accéder au Vote</h2>
+        <p class="text-gray-600">Utilisez votre ID numérique pour accéder au bulletin de vote et exercer votre droit.</p>
+    </a>
+
+    <a href="{{ url_for('results') }}" class="block card p-6 hover:shadow-lg transition duration-300">
+        <h2 class="text-2xl font-semibold mb-2 text-pink-600">3. Consulter les Résultats</h2>
+        <p class="text-gray-600">Accédez aux résultats en temps réel, mis à jour directement par la Blockchain.</p>
+    </a>
+</div>
+
+<div class="mt-12 text-center">
+    <h2 class="text-3xl font-bold text-gray-800 mb-6">Transparence & Sécurité</h2>
+    <p class="text-gray-600 max-w-2xl mx-auto mb-8">
+        Toutes les actions (inscriptions, votes, mises à jour) sont enregistrées de manière immuable sur une chaîne de blocs.
+    </p>
+    <a href="{{ url_for('explorer') }}" class="btn-primary inline-block bg-escen-primary hover:bg-escen-secondary">
+        Explorer la Blockchain
+    </a>
+</div>
+
+{% endblock %}

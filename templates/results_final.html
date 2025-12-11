@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RÉSULTAT FINAL - ESCEN</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Couleurs ESCEN */
+        :root {
+            --color-escen-primary: #07845f; /* Vert foncé, couleur principale */
+            --color-escen-secondary: #00a7c4; /* **CORRIGÉ** : Cyan Professionnel */
+        }
+        /* Configuration Tailwind pour utiliser les variables CSS (pour la cohérence) */
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'escen-primary': 'var(--color-escen-primary)',
+                        'escen-secondary': 'var(--color-escen-secondary)',
+                        'escen-dark': '#07845f', /* Couleur de la barre de navigation */
+                    }
+                }
+            }
+        }
+
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
+        /* FOND DE PAGE (COULEUR CLAIRE HORS BLANC) MAINTENU */
+        body { font-family: 'Inter', sans-serif; background-color: #f4f7f9; } 
+        
+        .card { background-color: white; border-radius: 0.5rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1); }
+        
+        /* CORRECTION : Utilisation de la nouvelle couleur secondaire pour la barre de progression */
+        .progress-bar { background-color: var(--color-escen-secondary); } 
+        
+        .winner-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
+            border: 3px solid var(--color-escen-primary);
+            box-shadow: 0 10px 20px rgba(7, 132, 95, 0.2);
+            position: relative;
+        }
+        .winner-role {
+            position: absolute;
+            top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: var(--color-escen-primary);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 9999px;
+            font-weight: 800;
+            font-size: 0.9rem;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        /* Logo avec fond blanc sur barre de navigation foncée (inchangé) */
+        .nav-logo-img { 
+            height: 35px; 
+            width: auto; 
+            background-color: white; /* Fond blanc appliqué directement sur l'image */
+            padding: 4px; 
+            border-radius: 4px;
+            margin-right: 12px; 
+        }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen">
+    
+    <header class="bg-escen-dark text-white p-4 shadow-md sticky top-0 z-50">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center">
+                <img src="{{ url_for('static', filename='images/escen_logo.png') }}" 
+                     alt="ESCEN Logo"
+                     class="nav-logo-img">
+                <h1 class="text-2xl font-bold">ESCEN Vote</h1>
+            </div>
+            
+            <nav>
+                <a href="{{ url_for('index') }}" class="px-3 hover:text-blue-300">Accueil</a>
+                <a href="{{ url_for('results') }}" class="px-3 hover:text-blue-300">Résultats</a>
+                <a href="{{ url_for('voter_login') }}" class="px-3 hover:text-blue-300">Vote</a>
+                <a href="{{ url_for('explorer') }}" class="px-3 hover:text-blue-300">Blockchain</a>
+                
+                <a href="{{ url_for('self_register_candidate_get') }}" class="px-3 hover:text-blue-300">Candidature</a>
+                
+                {% if session.get('admin_logged_in') %}
+                    <a href="{{ url_for('admin_dashboard') }}" class="px-3 text-yellow-300 hover:text-yellow-500">Admin</a>
+                    <a href="{{ url_for('admin_logout') }}" class="px-3 hover:text-red-400">Déconnexion</a>
+                {% else %}
+                    <a href="{{ url_for('admin_login') }}" class="px-3 hover:text-blue-300">Connexion Admin</a>
+                {% endif %}
+            </nav>
+        </div>
+    </header>
+    <main class="flex-grow container mx-auto px-4 py-8">
+        <div class="max-w-5xl mx-auto">
+            <header class="text-center pb-6 border-b border-gray-300 mb-10">
+                <h1 class="text-5xl font-extrabold text-gray-900 mb-2">RÉSULTATS DÉFINITIFS</h1>
+                <p class="text-2xl font-semibold text-escen-primary">Élection Délégué Général - {{ status_message }}</p>
+            </header>
+
+            {% if results %}
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+                {% set roles = ['DÉLÉGUÉ GÉNÉRAL', 'ADJOINT DÉLÉGUÉ', 'SECRÉTAIRE'] %}
+                
+                {% for result in results[:3] %}
+                <div class="card p-6 text-center winner-card relative">
+                    <span class="winner-role">{{ roles[loop.index0] }}</span>
+                    <img src="{{ result.image_url }}" alt="Photo de {{ result.nom_complet }}" 
+                         class="w-32 h-32 rounded-full object-cover mx-auto mt-6 border-4 border-escen-primary shadow-lg">
+                    
+                    <h2 class="text-2xl font-black text-gray-900 mt-4">{{ result.nom_complet }}</h2> 
+                    
+                    <p class="text-lg font-bold text-escen-primary mt-1">{{ result.parcours }}</p>
+                    <p class="text-md text-gray-600 italic mt-2">"{{ result.slogan }}"</p>
+                    <div class="mt-4 pt-3 border-t border-gray-200">
+                        <span class="text-4xl font-extrabold text-red-600 block">{{ result.votes }}</span>
+                        <span class="text-lg font-medium text-gray-700">VOTE(S)</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <h3 class="text-3xl font-bold text-gray-800 border-b pb-3 mb-6">Classement Complet ({{ total_votes }} Votes Totaux)</h3>
+            <div class="space-y-4">
+                {% for result in results %}
+                <div class="card p-4 flex items-center justify-between space-x-6">
+                    <div class="flex-shrink-0 text-xl font-extrabold text-gray-500 w-8 text-center">{{ loop.index }}</div>
+                    
+                    <div class="flex-shrink-0">
+                        <img src="{{ result.image_url }}" alt="Photo de {{ result.nom_complet }}" 
+                             class="w-12 h-12 rounded-full object-cover border border-gray-300">
+                    </div>
+                    
+                    <div class="flex-1 min-w-0">
+                         <h4 class="text-lg font-extrabold text-escen-primary leading-tight">{{ result.nom_complet }}</h4>
+                        <p class="text-sm text-gray-500 mt-1">{{ result.parcours }} - {{ result.slogan }}</p>
+                    </div>
+
+                    <div class="flex items-center space-x-4">
+                        <div class="w-48 bg-gray-200 rounded-full h-3">
+                            <div class="h-3 rounded-full progress-bar" 
+                                 style="width: {{ result.percentage }}%; background-color: {% if loop.index == 1 %}var(--color-escen-primary){% elif loop.index == 2 %}var(--color-escen-secondary){% elif loop.index == 3 %}#6366f1{% else %}#9ca3af{% endif %};"></div>
+                        </div>
+                        <span class="text-2xl font-extrabold text-escen-primary w-16 text-right">{{ result.percentage }}%</span>
+                        <span class="text-xl font-bold text-gray-600 w-16 text-right">{{ result.votes }} VOTE(S)</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+                <div class="mt-10 p-6 bg-blue-100 border border-blue-400 rounded-lg text-center text-blue-800">
+                    <p class="font-semibold text-lg">Aucun résultat à afficher pour l'instant.</p>
+                    <p class="text-sm mt-2">Le vote est peut-être en attente.</p>
+                </div>
+            {% endif %}
+
+            <footer class="mt-12 pt-4 border-t text-center text-md text-gray-500">
+                <p>
+                    Les données de vote peuvent être vérifiées sur l'<a href="{{ url_for('explorer') }}" class="text-escen-primary hover:underline font-semibold">Explorateur de la Blockchain</a>.
+                </p>
+            </footer>
+        </div>
+    </main>
+    
+    <footer class="bg-gray-100 text-gray-600 p-4 mt-auto">
+        <div class="container mx-auto text-center">
+            <p>&copy; {{ datetime.now().year }} Système de Vote Électronique ESCEN. Propulsé par la Blockchain.</p>
+        </div>
+    </footer>
+</body>
+</html>

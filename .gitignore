@@ -1,0 +1,41 @@
+# -----------------------------------------------------------------
+# 1. Fichiers et Dossiers Générés par Python
+# -----------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*~
+# Environnement virtuel (très important de l'ignorer !)
+venv/
+.venv/
+
+# -----------------------------------------------------------------
+# 2. Fichiers de Base de Données et Données Temporaires/Locales
+# -----------------------------------------------------------------
+# Les fichiers .json qui contiennent l'état de l'élection,
+# les votants inscrits, et la blockchain. Ces données sont LOCALE
+# et ne doivent pas être versionnées ou rendues publiques.
+database/voters.json
+database/candidates.json
+database/vote_chain.json
+database/settings.json
+database/eligibility_list.json
+
+# Fichiers d'administration locaux (si vous les avez initialisés)
+database/admin_users.json
+
+# Fichiers de log
+*.log
+
+# -----------------------------------------------------------------
+# 3. Fichiers de Téléversement de Candidat
+# -----------------------------------------------------------------
+# Dossier où les photos des candidats sont stockées localement
+# Pour la démo, on ignore ce dossier.
+uploads/
+
+# -----------------------------------------------------------------
+# 4. Fichiers Spécifiques à l'OS (Mac/Windows)
+# -----------------------------------------------------------------
+.DS_Store
+Thumbs.db

@@ -2,737 +2,732 @@ import json
 import os
 import hashlib
 from uuid import uuid4
-from flask import Flask, jsonify, request, render_template, redirect, url_for, session, g
+from flask import Flask, jsonify, request, render_template, redirect, url_for, session
 from datetime import datetime, timezone 
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 import logging
 from functools import wraps
-import pandas as pd # NOUVEL IMPORT NÉCESSAIRE (pip install pandas openpyxl)
-import tempfile # NOUVEL IMPORT: Pour une gestion sécurisée et multi-OS des fichiers temporaires
+import pandas as pd
+import tempfile
+import click # NOUVEL IMPORT: Pour les commandes CLI Flask
 
-# NOUVEL IMPORT POUR LA BASE DE DONNÉES
-from flask_sqlalchemy import SQLAlchemy 
-
-# --- CONFIGURATION INITIALE SIMPLIFIÉE ---
+# --- CONFIGURATION INITIALE & BASE DE DONNÉES ---
 app = Flask(__name__)
-# Utilisez une clé secrète forte en production !
-# La variable FLASK_SECRET_KEY sera lue depuis les variables d'environnement de Render
+# Récupère la clé secrète de l'environnement ou utilise un UUID par défaut (À CHANGER EN PROD)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', str(uuid4())) 
 
-# --- NOUVELLE CONFIGURATION POUR POSTGRESQL AVEC FLASK-SQLALCHEMY ---
-# La variable DATABASE_URL sera lue depuis les variables d'environnement de Render
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
-# Désactiver le suivi des modifications pour économiser des ressources
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False 
+# Configuration de la base de données PostgreSQL pour Render
+# Utilise la variable d'environnement DATABASE_URL fournie par Render
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///site.db').replace("postgres://", "postgresql://", 1)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db = SQLAlchemy(app) # Initialisation de SQLAlchemy
-# ------------------------------------------------------------------
+# Initialisation de l'ORM
+from flask_sqlalchemy import SQLAlchemy
+db = SQLAlchemy(app)
+
+# Fichiers de candidats (pour les photos)
+UPLOAD_FOLDER = 'static/candidates_photos'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+
+# Constantes de l'élection
+DEFAULT_ADMIN_USERNAME = 'admin_institution'
+DEFAULT_ADMIN_PASSWORD = 'ADMIN_PASSWORD_ES'
+STATUS_VOTING = 'VOTING'
+STATUS_PENDING = 'PENDING'
+STATUS_FINISHED = 'FINISHED'
 
 # --- CORRECTION DE L'ERREUR JINJA : CONTEXTE-PROCESSEUR ---
 @app.context_processor
 def inject_datetime():
     """Rend l'objet datetime disponible dans tous les templates Jinja2."""
-    return {'datetime': datetime}
+    return {'datetime': datetime, 'STATUS_VOTING': STATUS_VOTING}
 # ------------------------------------------------------------------
 
-# Remplacement de l'ancien DATA_DIR et des fichiers, l'application utilise maintenant la DB
-DATA_DIR = 'database' # Maintenu pour le dossier des photos
-os.makedirs(DATA_DIR, exist_ok=True) 
-
-# --- MODÈLES DE BASE DE DONNÉES ---
+# --- DÉFINITION DES MODÈLES (SQLAlchemy ORM) ---
 
 class AdminUser(db.Model):
+    """Modèle pour les utilisateurs administrateurs."""
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
-
+    # CORRECTION DE L'ERREUR DE TRONCATURE : Augmentation à 256
+    password_hash = db.Column(db.String(256), nullable=False) 
+    
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
-
+        
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
 class Voter(db.Model):
+    """Modèle pour les votants (étudiants éligibles)."""
     id = db.Column(db.Integer, primary_key=True)
-    nom = db.Column(db.String(120), nullable=False)
-    prenom = db.Column(db.String(120), nullable=False)
-    parcours = db.Column(db.String(120), nullable=False)
-    id_numerique = db.Column(db.String(50), unique=True, nullable=False)
+    id_numerique = db.Column(db.String(10), unique=True, nullable=False) # ID unique de 10 caractères
+    nom = db.Column(db.String(100), nullable=False)
+    prenom = db.Column(db.String(100), nullable=False)
+    parcours = db.Column(db.String(100), nullable=False)
     has_voted = db.Column(db.Boolean, default=False)
-
+    
 class Candidate(db.Model):
+    """Modèle pour les candidats."""
     id = db.Column(db.Integer, primary_key=True)
-    candidate_id = db.Column(db.String(50), unique=True, nullable=False) # L'ID UUID utilisé pour le vote
-    name = db.Column(db.String(150), nullable=False)
-    slogan = db.Column(db.String(500), nullable=True)
-    programme = db.Column(db.Text, nullable=True)
-    photo_path = db.Column(db.String(255), nullable=True)
-    is_approved = db.Column(db.Boolean, default=False)
-    vote_count = db.Column(db.Integer, default=0) 
-
+    nom = db.Column(db.String(100), nullable=False)
+    prenom = db.Column(db.String(100), nullable=False)
+    parcours = db.Column(db.String(100), nullable=False)
+    slogan = db.Column(db.String(200), nullable=False)
+    programme = db.Column(db.Text, nullable=False)
+    photo_filename = db.Column(db.String(120), nullable=True) # Nom du fichier photo
+    is_validated = db.Column(db.Boolean, default=False)
+    
 class Block(db.Model):
-    index = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.DateTime, default=datetime.now(timezone.utc))
-    data = db.Column(db.Text, nullable=False) # JSON string of the transaction/action data
+    """Modèle pour les blocs de la blockchain."""
+    id = db.Column(db.Integer, primary_key=True)
+    index = db.Column(db.Integer, unique=True, nullable=False)
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    data = db.Column(db.Text, nullable=False) # Contient le JSON du payload (vote, inscription, etc.)
     previous_hash = db.Column(db.String(64), nullable=False)
     hash = db.Column(db.String(64), unique=True, nullable=False)
-    nonce = db.Column(db.Integer, default=0)
+    type = db.Column(db.String(50), nullable=False) # 'GENESIS', 'VOTE', 'VOTER_REGISTERED', etc.
 
-# -----------------------------------------------
+class ElectionStatus(db.Model):
+    """Modèle pour stocker l'état global de l'élection."""
+    id = db.Column(db.Integer, primary_key=True)
+    status = db.Column(db.String(20), default=STATUS_PENDING) # VOTING, PENDING, FINISHED
+    results_visible = db.Column(db.Boolean, default=False) # Si les résultats sont publics
 
-# --- CONSTANTES ET FONCTIONS GLOBALES (Gardées de l'original) ---
+# --- FONCTIONS DE BASE DE LA BLOCKCHAIN (ADAPTÉES à l'ORM) ---
 
-# Paramètres de sécurité
-PROOF_OF_WORK_PREFIX = '0000' # Exigence de 4 zéros pour un hash valide
-
-# Utilisateurs Administrateurs par défaut (pour l'initialisation de la DB)
-DEFAULT_ADMINS = {
-    "admin_institution": "secure_password_hash",
-}
-
-# Configuration pour le téléchargement de photos
-UPLOAD_FOLDER = os.path.join(DATA_DIR, 'candidate_photos')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True) 
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
-
-# Fichier Excel pour le chargement des données (Gardé pour compatibilité si la fonctionnalité existe)
-VOTERS_DEFAULT_FILE = 'voters_default.xlsx'
-CANDIDATES_DEFAULT_FILE = 'candidates_default.xlsx' 
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-# --- FONCTIONS DE BASE DE DONNÉES ET BLOCKCHAIN ---
-
-def calculate_hash(block):
-    """Calcule le hash SHA-256 pour un objet Block."""
-    block_string = json.dumps({
-        "index": block.index,
-        "timestamp": block.timestamp.isoformat() if isinstance(block.timestamp, datetime) else block.timestamp,
-        "data": block.data,
-        "previous_hash": block.previous_hash,
-        "nonce": block.nonce
-    }, sort_keys=True)
+def get_hash(block):
+    """Calcule le SHA256 d'un bloc."""
+    block_string = json.dumps(
+        {
+            "index": block.index,
+            "timestamp": block.timestamp.isoformat(),
+            "data": block.data,
+            "previous_hash": block.previous_hash,
+            "type": block.type
+        }, 
+        sort_keys=True
+    )
     return hashlib.sha256(block_string.encode()).hexdigest()
 
-def create_block(data, previous_hash, nonce=0):
-    """Crée un nouvel objet Block."""
-    # Utilise Block.query.count() pour déterminer l'index du nouveau bloc
-    index = db.session.query(Block).count() + 1
+def get_last_block():
+    """Récupère le dernier bloc de la chaîne (Block)."""
+    return db.session.execute(db.select(Block).order_by(Block.index.desc())).scalar_one_or_none()
+
+def get_full_chain():
+    """Récupère tous les blocs, triés par index."""
+    return db.session.execute(db.select(Block).order_by(Block.index)).scalars().all()
+
+def add_block(data, block_type):
+    """Ajoute un nouveau bloc à la chaîne."""
+    last_block = get_last_block()
+    
+    # Si la chaîne est vide (devrait contenir le bloc Genesis), on ne peut pas ajouter.
+    if last_block is None:
+        return None 
+    
+    new_index = last_block.index + 1
+    
+    # Création du nouveau bloc
     new_block = Block(
-        index=index,
-        timestamp=datetime.now(timezone.utc),
-        data=json.dumps(data), # S'assurer que les données sont stockées en JSON string
-        previous_hash=previous_hash,
-        nonce=nonce
+        index=new_index,
+        data=json.dumps(data),
+        previous_hash=last_block.hash,
+        type=block_type
     )
-    # Recalculer le hash ici car le timestamp est fixé
-    new_block.hash = calculate_hash(new_block)
+    # Calcul du hash du nouveau bloc
+    new_block.hash = get_hash(new_block)
+    
+    db.session.add(new_block)
+    db.session.commit()
     return new_block
-
-def get_latest_block():
-    """Récupère le dernier bloc de la chaîne (Block object)."""
-    return db.session.query(Block).order_by(Block.index.desc()).first()
-
-def mine_block(data):
-    """Ajoute un nouveau bloc à la chaîne via PoW."""
-    last_block = get_latest_block()
-    previous_hash = last_block.hash if last_block else '0' # Gestion du cas Genesis
-
-    nonce = 0
-    while True:
-        new_block = create_block(data, previous_hash, nonce)
-        
-        if new_block.hash.startswith(PROOF_OF_WORK_PREFIX): 
-            # Si la preuve est valide, on enregistre le bloc dans la base
-            try:
-                db.session.add(new_block)
-                db.session.commit()
-                logging.info(f"Bloc miné et ajouté à la DB. Index: {new_block.index}")
-                return new_block
-            except Exception as e:
-                logging.error(f"Erreur lors de l'enregistrement du bloc dans la DB: {e}")
-                db.session.rollback()
-                return None # Échec
-        
-        nonce += 1
-        # Limite de sécurité pour éviter une boucle infinie en cas de configuration trop difficile
-        if nonce > 500000: 
-             logging.error("Échec du minage: Nonce max atteint.")
-             return None
-
-def is_valid_chain():
-    """Vérifie l'intégrité de la chaîne (hash, prev_hash, PoW)."""
-    chain = db.session.query(Block).order_by(Block.index.asc()).all()
     
-    if not chain:
-        return False, "Chaîne vide."
+def get_election_status():
+    """Récupère l'état de l'élection (status et visibilité des résultats)."""
+    status = ElectionStatus.query.first()
+    if not status:
+        # Crée un état par défaut s'il n'existe pas
+        status = ElectionStatus(status=STATUS_PENDING, results_visible=False)
+        db.session.add(status)
+        db.session.commit()
+    return status
 
-    for i in range(1, len(chain)):
-        current_block = chain[i]
-        previous_block = chain[i-1]
+# --- COMMANDES CLI POUR L'INITIALISATION DE LA BD ---
 
-        # 1. Vérification du hash
-        if current_block.hash != calculate_hash(current_block):
-            logging.error(f"Hash invalide pour le bloc #{current_block.index}")
-            return False, f"Hash invalide pour le bloc #{current_block.index}"
-
-        # 2. Vérification du lien
-        if current_block.previous_hash != previous_block.hash:
-            logging.error(f"Lien invalide pour le bloc #{current_block.index}")
-            return False, f"Lien invalide pour le bloc #{current_block.index}"
-
-        # 3. Vérification de la Preuve de Travail
-        if not current_block.hash.startswith(PROOF_OF_WORK_PREFIX):
-            logging.error(f"PoW invalide pour le bloc #{current_block.index}")
-            return False, f"PoW invalide pour le bloc #{current_block.index}"
-
-    return True, "Chaîne valide."
-
-def calculate_results():
-    """Calcule les résultats du vote en parcourant la blockchain."""
-    # Récupérer les blocs de vote
-    vote_blocks = db.session.query(Block).filter(Block.data.contains('"action": "VOTE"')).all()
-    
-    # Créer un dictionnaire de comptage des votes
-    vote_counts = {}
-
-    for block in vote_blocks:
-        try:
-            data = json.loads(block.data)
-            candidate_id = data.get('candidate_id')
-            if candidate_id:
-                # Incrémenter le compteur
-                vote_counts[candidate_id] = vote_counts.get(candidate_id, 0) + 1
-        except json.JSONDecodeError:
-            logging.error(f"Erreur de décodage JSON dans le bloc {block.index}")
-            continue
-
-    total_votes = sum(vote_counts.values())
-    
-    # Récupérer tous les candidats approuvés
-    candidates = Candidate.query.filter_by(is_approved=True).all()
-    
-    results = []
-    
-    for candidate in candidates:
-        votes = vote_counts.get(candidate.candidate_id, 0)
-        percentage = (votes / total_votes * 100) if total_votes > 0 else 0
-        
-        results.append({
-            'candidate_id': candidate.candidate_id,
-            'name': candidate.name,
-            'photo_path': candidate.photo_path,
-            'votes': votes,
-            'percentage': round(percentage, 2)
-        })
-
-    # Trier par votes (décroissant)
-    results.sort(key=lambda x: x['votes'], reverse=True)
-    
-    return results, total_votes
-
+@app.cli.command("initdb")
 def init_db():
-    """Initialise la base de données et les données par défaut."""
-    with app.app_context():
-        # Créer toutes les tables définies (AdminUser, Voter, Candidate, Block)
-        db.create_all() 
+    """Crée toutes les tables, l'utilisateur admin et le bloc Genesis."""
+    
+    # 1. Création des tables
+    print("Création des tables de la base de données...")
+    db.create_all()
+    
+    # 2. Création de l'utilisateur admin par défaut
+    if not AdminUser.query.filter_by(username=DEFAULT_ADMIN_USERNAME).first():
+        print(f"Création de l'utilisateur admin par défaut ({DEFAULT_ADMIN_USERNAME})...")
+        admin = AdminUser(username=DEFAULT_ADMIN_USERNAME)
+        admin.set_password(DEFAULT_ADMIN_PASSWORD)
+        db.session.add(admin)
+        db.session.commit()
+    else:
+        print("L'utilisateur admin existe déjà.")
 
-        # 1. Initialisation des Administrateurs
-        if not db.session.query(AdminUser).first():
-            logging.info("Ajout des administrateurs par défaut...")
-            for user, password in DEFAULT_ADMINS.items():
-                admin = AdminUser(username=user)
-                admin.set_password(password)
-                db.session.add(admin)
-            db.session.commit()
+    # 3. Création du bloc Genesis
+    if not Block.query.filter_by(index=0).first():
+        print("Création du bloc Genesis...")
+        genesis_data = {
+            'message': 'Initialisation de la blockchain de vote ESCEN',
+            'admin_creator': DEFAULT_ADMIN_USERNAME
+        }
+        genesis_block = Block(
+            index=0,
+            data=json.dumps(genesis_data),
+            previous_hash='0', # Convention pour le premier bloc
+            type='GENESIS'
+        )
+        genesis_block.hash = get_hash(genesis_block)
+        db.session.add(genesis_block)
+        db.session.commit()
+        print("Bloc Genesis créé.")
+    else:
+        print("Le bloc Genesis existe déjà.")
+        
+    # 4. Création du statut de l'élection
+    if not ElectionStatus.query.first():
+        print("Création du statut de l'élection par défaut (PENDING)...")
+        status = ElectionStatus(status=STATUS_PENDING, results_visible=False)
+        db.session.add(status)
+        db.session.commit()
+    else:
+        print("Le statut de l'élection existe déjà.")
+        
+    print("Base de données initialisée avec succès.")
 
-        # 2. Initialisation de la Blockchain (Bloc Genesis)
-        if not db.session.query(Block).first():
-            logging.info("Création du bloc Genesis de la Blockchain...")
-            # On ne passe pas par mine_block pour le Genesis pour des raisons de simplicité
-            # Il est directement créé et enregistré
-            genesis_block = create_block(data={'action': 'GENESIS_BLOCK_CREATED'}, previous_hash='0', nonce=0)
-            genesis_block.hash = '0000' + 'a' * 60 # Hash trivial pour le Genesis
-            db.session.add(genesis_block)
-            db.session.commit()
-            
-        logging.info("Base de données initialisée ou déjà existante.")
+# --- DÉCORATEURS ET FONCTIONS UTILITAIRES ---
 
-# --- MIDDLEWARES/DECORATEURS (GARDÉS DE L'ORIGINAL) ---
-
-def admin_required(f):
+def login_required(f):
+    """Décorateur pour vérifier la session administrateur."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get('admin_logged_in'):
-            return redirect(url_for('admin_login', error="Accès Administrateur requis."))
+        if 'admin_logged_in' not in session or not session['admin_logged_in']:
+            return redirect(url_for('admin_login', error="Accès refusé. Veuillez vous connecter."))
         return f(*args, **kwargs)
     return decorated_function
 
-# État du vote (Simulation)
-# NOTE: En production, cet état devrait être stocké dans la DB (par ex. dans une table `ElectionStatus`). 
-# Pour respecter la non-modification des fonctionnalités existantes, je simule l'état ici.
-ELECTION_STATUS = 'VOTING' # 'PENDING', 'VOTING', 'FINISHED'
-RESULTS_VISIBLE = True # Faux pour masquer les résultats
+def allowed_file(filename):
+    """Vérifie si l'extension du fichier est autorisée."""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# --- ROUTES (Adaptées à la Base de Données) ---
-
-# --- Routes d'Affichage ---
+# --- ROUTES D'AFFICHAGE (GET) ---
 
 @app.route('/')
 def index():
+    """Page d'accueil."""
     return render_template('index.html')
 
-@app.route('/results')
-def results():
-    status_message = "Vote en cours - Résultats en temps réel"
-    if ELECTION_STATUS == 'PENDING':
-        status_message = "Le vote n'a pas encore commencé."
-    elif ELECTION_STATUS == 'FINISHED':
-        status_message = "Le vote est terminé."
+@app.route('/voter_login')
+def voter_login():
+    """Page de connexion pour les votants."""
+    return render_template('voter_login.html')
 
-    if not RESULTS_VISIBLE:
-        status_message = "Les résultats sont actuellement cachés par l'administration."
-        return render_template('results.html', 
-                               election_status=ELECTION_STATUS,
-                               status_message=status_message,
-                               total_votes=0,
-                               results=None)
+@app.route('/self_register_student')
+def self_register_student_get():
+    """Page d'auto-inscription des étudiants (votants)."""
+    return render_template('self_register_student.html')
 
-    results_data, total_votes = calculate_results()
+@app.route('/self_register_candidate')
+def self_register_candidate_get():
+    """Page d'auto-inscription des candidats."""
+    return render_template('self_register_candidate.html')
 
-    return render_template('results.html',
-                           election_status=ELECTION_STATUS,
-                           status_message=status_message,
-                           total_votes=total_votes,
-                           results=results_data)
-
-@app.route('/results_final')
-@admin_required
-def results_final():
-    # Cette route est accessible uniquement par l'admin (admin_required)
-    
-    # On force la visibilité et l'état à "FINISHED" pour cette page
-    results_data, total_votes = calculate_results()
-    
-    # Trouver le gagnant
-    winner = None
-    if results_data:
-        winner = results_data[0] # Le premier après le tri est le gagnant
-
-    return render_template('results_final.html',
-                           results=results_data,
-                           total_votes=total_votes,
-                           winner=winner)
-
-@app.route('/explorer')
-def explorer():
-    # La logique de l'explorateur reste très similaire
-    chain_is_valid, validation_message = is_valid_chain()
-    
-    # Construction de la chaîne pour l'affichage (similaire à l'original)
-    blockchain_data = db.session.query(Block).order_by(Block.index.asc()).all()
-    
-    # Conversion des objets Block en dicts pour le template
-    chain_for_template = []
-    for block in blockchain_data:
-        block_dict = {
-            'index': block.index,
-            'timestamp': block.timestamp.isoformat(),
-            'data': block.data,
-            'previous_hash': block.previous_hash,
-            'hash': block.hash,
-            'nonce': block.nonce
-        }
-        chain_for_template.append(block_dict)
-
-    return render_template('explorer_vote.html', 
-                           blockchain_chain=chain_for_template, 
-                           is_valid=chain_is_valid, 
-                           validation_message=validation_message)
-
-# --- Routes d'Authentification / Accès ---
-
-@app.route('/admin_login', methods=['GET', 'POST'])
-def admin_login():
-    if session.get('admin_logged_in'):
-        return redirect(url_for('admin_dashboard'))
-        
+@app.route('/admin_login', methods=['GET'])
+def admin_login_get():
+    """Page de connexion administrateur (GET)."""
     error = request.args.get('error')
-    
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        
-        user = AdminUser.query.filter_by(username=username).first()
-        
-        if user and user.check_password(password):
-            session['admin_logged_in'] = True
-            session['admin_username'] = username
-            return redirect(url_for('admin_dashboard'))
-        else:
-            error = "Nom d'utilisateur ou mot de passe incorrect."
-
     return render_template('admin_login.html', error=error)
 
 @app.route('/admin_logout')
 def admin_logout():
+    """Déconnexion administrateur."""
     session.pop('admin_logged_in', None)
     session.pop('admin_username', None)
     return redirect(url_for('index'))
 
-@app.route('/voter_login', methods=['GET'])
-def voter_login():
-    return render_template('voter_login.html')
+@app.route('/admin_dashboard')
+@login_required
+def admin_dashboard():
+    """Tableau de bord administrateur."""
+    
+    # 1. État de l'élection
+    status_obj = get_election_status()
+    
+    # 2. Statistiques des votants
+    total_voters = Voter.query.count()
+    voters_registered = total_voters
+    voters_voted = Voter.query.filter_by(has_voted=True).count()
+    
+    # 3. Candidats
+    pending_candidates = Candidate.query.filter_by(is_validated=False).all()
+    validated_candidates = Candidate.query.filter_by(is_validated=True).all()
+    
+    # 4. Logs/Blockchain
+    last_block = get_last_block()
+    latest_blocks = db.session.execute(
+        db.select(Block).order_by(Block.index.desc()).limit(5)
+    ).scalars().all()
+    
+    context = {
+        'admin_username': session.get('admin_username', 'Admin'),
+        'election_status': status_obj.status,
+        'results_visible': status_obj.results_visible,
+        'voters_registered': voters_registered,
+        'voters_voted': voters_voted,
+        'total_blocks': last_block.index if last_block else 0,
+        'pending_candidates': pending_candidates,
+        'validated_candidates': validated_candidates,
+        'latest_blocks': latest_blocks,
+        'STATUS_PENDING': STATUS_PENDING,
+        'STATUS_VOTING': STATUS_VOTING,
+        'STATUS_FINISHED': STATUS_FINISHED,
+    }
+    return render_template('admin_dashboard.html', **context)
 
-@app.route('/voting_page')
-def voting_page():
-    # Vérification d'une session ou d'un ID valide dans la session
-    voter_id = session.get('voter_id')
-    if not voter_id:
-        return redirect(url_for('voter_login'))
-
+@app.route('/voting_page/<voter_id>')
+def voting_page(voter_id):
+    """Page de vote du votant."""
+    
+    status_obj = get_election_status()
+    
+    if status_obj.status != STATUS_VOTING:
+        return render_template('error_page.html', message="Le vote est actuellement clos ou en attente d'ouverture.")
+        
     voter = Voter.query.filter_by(id_numerique=voter_id).first()
     
-    if not voter or voter.has_voted:
-        # Si déjà voté ou ID invalide, on affiche une page d'erreur
-        return render_template('error_page.html', message="Vous avez déjà voté ou votre ID est invalide.")
+    if not voter:
+        return render_template('error_page.html', message="ID Votant non valide.")
         
-    if ELECTION_STATUS != 'VOTING':
-        return render_template('error_page.html', message="Le vote est actuellement clos.")
+    if voter.has_voted:
+        return render_template('error_page.html', message="Vous avez déjà exercé votre droit de vote.")
 
-    # Récupérer les candidats approuvés
-    candidates = Candidate.query.filter_by(is_approved=True).all()
-    
-    return render_template('voting_page.html', candidates=candidates, voter_id=voter_id)
+    candidates = Candidate.query.filter_by(is_validated=True).all()
 
-# --- Routes d'Administration ---
+    if not candidates:
+         return render_template('error_page.html', message="Aucun candidat validé pour le moment.")
 
-@app.route('/admin_dashboard')
-@admin_required
-def admin_dashboard():
-    # Récupérer les données de la DB
-    all_voters = db.session.query(Voter).all()
-    all_candidates = db.session.query(Candidate).all()
+    return render_template('voting_page.html', voter_id=voter_id, candidates=candidates)
+
+@app.route('/explorer')
+def explorer():
+    """Explorateur de la blockchain."""
+    full_chain = get_full_chain()
     
-    # Statistiques simples
-    total_voters = len(all_voters)
-    voters_who_voted = len([v for v in all_voters if v.has_voted])
+    # Préparation de la chaîne pour l'affichage (Anonymisation/Simplification)
+    # Le reste de la logique d'anonymisation est conservée dans la route
+    sanitized_chain = []
     
-    pending_candidates = [c for c in all_candidates if not c.is_approved]
-    approved_candidates = [c for c in all_candidates if c.is_approved]
+    for block in full_chain:
+        sanitized_block = {
+            'index': block.index,
+            'timestamp': block.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            'type': block.type,
+            'hash': block.hash,
+            'previous_hash': block.previous_hash,
+            'payload': json.loads(block.data) # Charger les données
+        }
+        
+        # Anonymisation des VOTES
+        if sanitized_block['type'] == 'VOTE' and isinstance(sanitized_block['payload'], dict):
+            # Assure que le type de données est visible, mais masque l'identité
+            anonymized_payload = sanitized_block['payload'].copy()
+            # On conserve juste l'ID du candidat (qui est public), mais pas l'ID du votant
+            anonymized_payload.pop('voter_id', None)
+            anonymized_payload.pop('timestamp', None)
+            
+            # Afficher seulement l'ID du candidat qui a reçu le vote
+            candidate_id = sanitized_block['payload'].get('candidate_id', 'N/A')
+            candidate = Candidate.query.get(candidate_id)
+            anonymized_payload['vote_for'] = f"CANDIDAT ID: {candidate_id} ({candidate.nom} {candidate.prenom})" if candidate else f"CANDIDAT ID: {candidate_id}"
+            
+            sanitized_block['payload'] = anonymized_payload
+            
+        # Anonymiser l'ID du votant lors de l'inscription pour l'événement (ID de 10 caractères)
+        elif sanitized_block['type'] == 'VOTER_REGISTERED' and isinstance(sanitized_block['payload'], dict):
+            sanitized_block['payload'] = sanitized_block['payload'].copy()
+            # On conserve une partie de l'ID pour montrer que l'événement a eu lieu, mais on le tronque
+            id_preview = sanitized_block['payload'].get('id_numerique', 'N/A')[:4] + '...'
+            sanitized_block['payload']['id_numerique'] = f"ID_NUMÉ.: {id_preview}"
+            # On masque le nom/prénom qui était aussi dans le payload
+            sanitized_block['payload']['nom'] = 'NOM/PRÉNOM ANONYMISÉ'
+            sanitized_block['payload']['prenom'] = 'NOM/PRÉNOM ANONYMISÉ'
+            
+        sanitized_chain.append(sanitized_block)
+        
+    return render_template('explorer_vote.html', blockchain_chain=sanitized_chain)
+
+@app.route('/results')
+def results():
+    """Page d'affichage des résultats."""
     
-    # Statut du système (utilisation des variables globales pour l'exemple)
-    system_status = {
-        'election_status': ELECTION_STATUS,
-        'results_visible': RESULTS_VISIBLE,
-        'blockchain_status': "Valide" if is_valid_chain()[0] else "INVALIDE (A vérifier!)"
+    status_obj = get_election_status()
+    election_status = status_obj.status
+    results_visible = status_obj.results_visible
+    
+    # 1. Récupération des votes
+    vote_blocks = Block.query.filter_by(type='VOTE').all()
+    total_votes = len(vote_blocks)
+    
+    # 2. Calcul des résultats
+    vote_counts = {}
+    for block in vote_blocks:
+        payload = json.loads(block.data)
+        candidate_id = payload.get('candidate_id')
+        if candidate_id:
+            vote_counts[candidate_id] = vote_counts.get(candidate_id, 0) + 1
+            
+    # 3. Récupération des candidats validés
+    candidates = Candidate.query.filter_by(is_validated=True).all()
+    
+    if not candidates:
+        status_message = "Aucun candidat validé pour le moment."
+        return render_template('results.html', results=[], total_votes=0, election_status=election_status, status_message=status_message)
+
+    results_data = []
+    
+    if election_status == STATUS_FINISHED and results_visible:
+        status_message = "RÉSULTAT FINAL OFFICIEL"
+    elif election_status == STATUS_VOTING and results_visible:
+        status_message = "Vote en cours - Résultats partiels visibles"
+    elif results_visible is False:
+        status_message = "Les résultats sont actuellement cachés par l'administration."
+    elif election_status == STATUS_PENDING:
+        status_message = "Le vote n'a pas encore commencé."
+    else:
+         status_message = "État de l'élection inconnu."
+
+
+    if results_visible:
+        for candidate in candidates:
+            votes = vote_counts.get(candidate.id, 0)
+            percentage = (votes / total_votes * 100) if total_votes > 0 else 0
+            
+            results_data.append({
+                'id': candidate.id,
+                'nom_complet': f"{candidate.prenom} {candidate.nom}",
+                'photo': url_for('static', filename=f'candidates_photos/{candidate.photo_filename}') if candidate.photo_filename else url_for('static', filename='images/default_candidate.png'),
+                'votes': votes,
+                'percentage': f"{percentage:.2f}"
+            })
+            
+        # Tri des résultats par nombre de votes (du plus grand au plus petit)
+        results_data.sort(key=lambda x: x['votes'], reverse=True)
+    
+    return render_template('results.html', 
+                           results=results_data, 
+                           total_votes=total_votes, 
+                           election_status=election_status,
+                           status_message=status_message)
+
+
+# --- ROUTES D'ACTION (POST / API) ---
+
+@app.route('/admin_login', methods=['POST'])
+def admin_login():
+    """Connexion administrateur (POST)."""
+    username = request.form.get('username')
+    password = request.form.get('password')
+
+    user = AdminUser.query.filter_by(username=username).first()
+
+    if user and user.check_password(password):
+        session['admin_logged_in'] = True
+        session['admin_username'] = user.username
+        return redirect(url_for('admin_dashboard'))
+    else:
+        return render_template('admin_login.html', error="Nom d'utilisateur ou mot de passe incorrect.")
+
+@app.route('/api/voter/login', methods=['POST'])
+def voter_api_login():
+    """API de connexion pour les votants."""
+    data = request.get_json()
+    id_numerique = data.get('id_numerique', '').strip()
+
+    if not id_numerique:
+        return jsonify({'error': 'ID numérique manquant.'}), 400
+
+    voter = Voter.query.filter_by(id_numerique=id_numerique).first()
+
+    if not voter:
+        return jsonify({'error': "ID non trouvé. Veuillez vous inscrire d'abord."}), 404
+        
+    if voter.has_voted:
+        return jsonify({'error': "Vous avez déjà voté."}), 403
+
+    status_obj = get_election_status()
+    if status_obj.status != STATUS_VOTING:
+        return jsonify({'error': "Le vote n'est pas ouvert pour l'instant."}), 403
+
+    # Succès: Redirection vers la page de vote avec l'ID
+    return jsonify({
+        'success': True,
+        'redirect_url': url_for('voting_page', voter_id=voter.id_numerique)
+    })
+
+@app.route('/api/vote', methods=['POST'])
+def api_vote():
+    """API d'enregistrement du vote sur la blockchain."""
+    data = request.get_json()
+    voter_id = data.get('voter_id')
+    candidate_id = data.get('candidate_id')
+
+    # Vérification de l'état
+    status_obj = get_election_status()
+    if status_obj.status != STATUS_VOTING:
+        return jsonify({'error': "Le vote n'est pas ouvert."}), 403
+
+    # 1. Vérification du votant
+    voter = Voter.query.filter_by(id_numerique=voter_id).first()
+    if not voter:
+        return jsonify({'error': 'ID Votant non valide.'}), 400
+    if voter.has_voted:
+        return jsonify({'error': 'Le votant a déjà voté.'}), 403
+    
+    # 2. Vérification du candidat
+    candidate = Candidate.query.filter_by(id=candidate_id, is_validated=True).first()
+    if not candidate:
+        return jsonify({'error': 'Candidat non valide ou non validé.'}), 400
+
+    # 3. Création du bloc de vote
+    vote_data = {
+        'voter_id': voter_id, # L'ID est stocké dans la chaîne pour validation interne/recomptage, mais sera anonymisé dans l'explorateur public.
+        'candidate_id': candidate_id,
+        'timestamp': datetime.now(timezone.utc).isoformat()
     }
-
-    return render_template('admin_dashboard.html', 
-                           admin_username=session['admin_username'],
-                           voters_list=all_voters,
-                           pending_candidates=pending_candidates,
-                           approved_candidates=approved_candidates,
-                           system_status=system_status,
-                           total_voters=total_voters,
-                           voters_who_voted=voters_who_voted)
-
-# --- Routes d'Auto-Inscription ---
-
-@app.route('/self_register_student', methods=['GET'])
-def self_register_student_get():
-    # Simuler le chargement des parcours si nécessaire (si un fichier existe)
-    parcours_list = ['M1 ESCEN', 'M2 ESCEN', 'B3 ESCEN'] 
-    return render_template('self_register_student.html', parcours_list=parcours_list)
-
-@app.route('/self_register_candidate', methods=['GET'])
-def self_register_candidate_get():
-    return render_template('self_register_candidate.html')
-
-# --- API Routes (Adaptées à la Base de Données) ---
+    
+    new_block = add_block(vote_data, 'VOTE')
+    
+    if not new_block:
+        return jsonify({'error': 'Erreur lors de la création du bloc.'}), 500
+        
+    # 4. Mise à jour du statut du votant
+    voter.has_voted = True
+    db.session.commit()
+    
+    return jsonify({
+        'success': 'Vote enregistré', 
+        'block_index': new_block.index
+    }), 200
 
 @app.route('/api/student/self_register', methods=['POST'])
-def self_register_student_api():
-    if ELECTION_STATUS != 'VOTING':
-        return jsonify({'error': "L'inscription est fermée, le vote n'est pas en cours."}), 400
-
+def api_student_self_register():
+    """API d'auto-inscription des étudiants."""
     data = request.get_json()
-    nom = data.get('nom', '').strip().upper()
-    prenom = data.get('prenom', '').strip().capitalize()
-    parcours = data.get('parcours', '').strip()
-    
+    nom = data.get('nom', '').upper()
+    prenom = data.get('prenom', '').title()
+    parcours = data.get('parcours', '').upper()
+
     if not all([nom, prenom, parcours]):
         return jsonify({'error': 'Tous les champs sont requis.'}), 400
         
-    # Vérification d'éligibilité (simulée ici, pourrait être une vérification DB/CSV plus complexe)
-    # Dans une version réelle, il faudrait vérifier dans une liste principale
+    # Génération de l'ID numérique (UUID tronqué pour 10 caractères)
+    id_numerique = str(uuid4().hex[:10]).upper()
     
-    # Vérifier si un étudiant avec ce nom/prénom/parcours existe déjà (simple)
+    # Vérification de l'existence d'un votant avec le même nom/prénom/parcours
+    # Pour éviter les doublons accidentels lors de l'inscription
     existing_voter = Voter.query.filter_by(nom=nom, prenom=prenom, parcours=parcours).first()
     if existing_voter:
-        return jsonify({'error': 'Un ID a déjà été généré pour cet étudiant.'}), 400
-        
-    # Vérifier si l'ID a déjà été généré (si l'algo d'ID est prévisible)
-    
-    # Génération de l'ID numérique (UUID tronqué pour l'exemple)
-    id_numerique = str(uuid4()).replace('-', '')[:10].upper()
-    
-    # Création du nouvel électeur dans la base de données
+        # Si la personne existe, on renvoie son ancien ID (pour éviter la fraude)
+        return jsonify({'error': f"Vous êtes déjà inscrit. Votre ID numérique est : {existing_voter.id_numerique}. Veuillez le noter."}), 409
+
+    # Création du nouveau votant
     new_voter = Voter(
+        id_numerique=id_numerique,
+        nom=nom,
+        prenom=prenom,
+        parcours=parcours
+    )
+    
+    # Enregistrement dans la DB
+    db.session.add(new_voter)
+    db.session.commit()
+    
+    # Enregistrement dans la blockchain
+    block_data = {
+        'id_numerique': id_numerique,
+        'nom': nom, # Sera anonymisé dans l'explorer
+        'prenom': prenom,
+        'parcours': parcours,
+        'timestamp': datetime.now(timezone.utc).isoformat()
+    }
+    add_block(block_data, 'VOTER_REGISTERED')
+
+    return jsonify({'success': 'Inscription réussie', 'id_numerique': id_numerique}), 200
+
+@app.route('/api/candidate/self_register', methods=['POST'])
+def api_candidate_self_register():
+    """API d'auto-inscription des candidats."""
+    
+    nom = request.form.get('nom', '').upper()
+    prenom = request.form.get('prenom', '').title()
+    parcours = request.form.get('parcours', '').upper()
+    slogan = request.form.get('slogan', '').strip()
+    programme = request.form.get('programme', '').strip()
+    
+    # 1. Vérification des données textuelles
+    if not all([nom, prenom, parcours, slogan, programme]):
+        return jsonify({'error': 'Tous les champs de texte sont requis.'}), 400
+        
+    # 2. Gestion de la photo
+    if 'photo' not in request.files:
+        return jsonify({'error': 'Photo de candidature requise.'}), 400
+        
+    file = request.files['photo']
+    if file.filename == '':
+        return jsonify({'error': 'Nom de fichier de photo manquant.'}), 400
+        
+    if file and allowed_file(file.filename):
+        # Création d'un nom de fichier sécurisé et unique basé sur le nom du candidat
+        filename_base = secure_filename(f"{nom}_{prenom}_{str(uuid4().hex[:8])}")
+        file_extension = file.filename.rsplit('.', 1)[1].lower()
+        photo_filename = f"{filename_base}.{file_extension}"
+        
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], photo_filename)
+        file.save(filepath)
+    else:
+        return jsonify({'error': 'Format de fichier non autorisé (PNG, JPG, JPEG uniquement).'}), 400
+        
+    # 3. Vérification de l'existence
+    existing_candidate = Candidate.query.filter_by(nom=nom, prenom=prenom, parcours=parcours).first()
+    if existing_candidate:
+        # En cas de doublon, on refuse et on supprime la photo uploadée
+        os.remove(filepath) 
+        return jsonify({'error': "Ce candidat est déjà inscrit ou en attente de validation."}), 409
+        
+    # 4. Création du nouveau candidat
+    new_candidate = Candidate(
         nom=nom,
         prenom=prenom,
         parcours=parcours,
-        id_numerique=id_numerique,
-        has_voted=False
-    )
-    
-    try:
-        db.session.add(new_voter)
-        db.session.commit()
-        
-        # Enregistrement de l'événement dans la blockchain
-        mine_block(data={
-            'action': 'VOTER_REGISTERED',
-            'id_numerique': id_numerique,
-            'nom': nom, # Le nom et prénom seront anonymisés dans l'explorateur
-            'prenom': prenom,
-            'parcours': parcours
-        })
-        
-        return jsonify({'success': True, 'id_numerique': id_numerique}), 200
-
-    except Exception as e:
-        db.session.rollback()
-        logging.error(f"Erreur lors de l'enregistrement de l'étudiant: {e}")
-        return jsonify({'error': "Erreur interne lors de l'enregistrement."}), 500
-
-@app.route('/api/candidate/self_register', methods=['POST'])
-def self_register_candidate_api():
-    if ELECTION_STATUS != 'VOTING':
-        return jsonify({'error': "L'inscription est fermée, le vote n'est pas en cours."}), 400
-
-    # Utilisation de request.form pour les champs de texte et request.files pour le fichier
-    name = request.form.get('name', '').strip()
-    slogan = request.form.get('slogan', '').strip()
-    programme = request.form.get('programme', '').strip()
-    photo_file = request.files.get('photo')
-
-    if not all([name, slogan, programme, photo_file]):
-        return jsonify({'error': 'Tous les champs (y compris la photo) sont requis.'}), 400
-        
-    # 1. Gestion de la photo
-    if photo_file and allowed_file(photo_file.filename):
-        filename = secure_filename(photo_file.filename)
-        # Utiliser un nom de fichier unique pour éviter les conflits
-        unique_filename = f"{uuid4().hex}_{filename}"
-        photo_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-        photo_file.save(photo_path)
-    else:
-        return jsonify({'error': "Type de fichier photo non autorisé. Utilisez PNG, JPG ou JPEG."}), 400
-        
-    # 2. Génération de l'ID et enregistrement
-    candidate_id = str(uuid4()).replace('-', '')[:10].upper()
-    
-    # Création du nouveau candidat dans la base de données (is_approved=False par défaut)
-    new_candidate = Candidate(
-        candidate_id=candidate_id,
-        name=name,
         slogan=slogan,
         programme=programme,
-        photo_path=photo_path,
-        is_approved=False # En attente d'approbation
+        photo_filename=photo_filename,
+        is_validated=False # Toujours non validé par défaut
     )
     
-    try:
-        db.session.add(new_candidate)
-        db.session.commit()
-        
-        # Enregistrement de l'événement dans la blockchain
-        mine_block(data={
-            'action': 'CANDIDATE_REGISTERED',
-            'candidate_id': candidate_id,
-            'name': name,
-            # N'incluez pas le programme complet ni le slogan dans la blockchain pour des raisons de taille/lisibilité
-        })
-        
-        return jsonify({'success': True, 'candidate_id': candidate_id}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        # Supprimer le fichier si l'enregistrement DB échoue
-        if os.path.exists(photo_path):
-            os.remove(photo_path)
-        logging.error(f"Erreur lors de l'enregistrement du candidat: {e}")
-        return jsonify({'error': "Erreur interne lors de l'enregistrement de la candidature."}), 500
-
-@app.route('/api/voter/login', methods=['POST'])
-def voter_login_api():
-    if ELECTION_STATUS != 'VOTING':
-        return jsonify({'error': "Le vote est actuellement clos."}), 400
-
-    data = request.get_json()
-    id_numerique = data.get('id_numerique', '').strip().upper()
+    db.session.add(new_candidate)
+    db.session.commit()
     
-    voter = Voter.query.filter_by(id_numerique=id_numerique).first()
+    # Pas de bloc blockchain pour l'inscription simple (seulement après validation)
     
-    if not voter:
-        return jsonify({'error': "ID Numérique inconnu. Veuillez vous inscrire d'abord."}), 404
+    return jsonify({'success': 'Candidature enregistrée', 'candidate_id': new_candidate.id}), 200
 
-    if voter.has_voted:
-        return jsonify({'error': "Vous avez déjà exercé votre droit de vote."}), 403
-        
-    # Connexion réussie, stockage de l'ID dans la session
-    session['voter_id'] = id_numerique
-    
-    return jsonify({'success': True, 'redirect_url': url_for('voting_page')}), 200
-
-@app.route('/api/voter/vote', methods=['POST'])
-def voter_vote_api():
-    if ELECTION_STATUS != 'VOTING':
-        return jsonify({'error': "Le vote est actuellement clos."}), 400
-        
-    voter_id_session = session.get('voter_id')
-    if not voter_id_session:
-        return jsonify({'error': "Session de vote invalide. Veuillez vous reconnecter."}), 403
-
-    data = request.get_json()
-    candidate_id = data.get('candidate_id', '').strip().upper()
-    voter_id = data.get('voter_id', '').strip().upper()
-
-    if voter_id != voter_id_session:
-        return jsonify({'error': "Incohérence des IDs de vote. Tentative de fraude détectée."}), 403
-        
-    # Vérification du votant
-    voter = Voter.query.filter_by(id_numerique=voter_id).first()
-    if not voter or voter.has_voted:
-        return jsonify({'error': "Vous avez déjà voté ou cet ID est invalide."}), 403
-        
-    # Vérification du candidat
-    candidate = Candidate.query.filter_by(candidate_id=candidate_id, is_approved=True).first()
-    if not candidate:
-        return jsonify({'error': "Candidat sélectionné invalide ou non approuvé."}), 404
-        
-    # 1. Enregistrement du vote sur la blockchain (via minage)
-    vote_data = {
-        'action': 'VOTE',
-        'voter_id': voter_id, # Cet ID est stocké pour l'intégrité mais sera anonymisé dans l'explorateur
-        'candidate_id': candidate_id
-    }
-    
-    new_block = mine_block(vote_data)
-    
-    if new_block is None:
-        return jsonify({'error': "Échec de l'enregistrement du vote (minage échoué)."}), 500
-
-    # 2. Mise à jour du statut du votant dans la DB
-    try:
-        voter.has_voted = True
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        logging.error(f"Erreur lors de la mise à jour du statut du votant: {e}")
-        # L'intégrité de la blockchain est prioritaire, mais on log l'erreur DB
-        return jsonify({'error': "Erreur interne post-vote. Contactez l'admin."}), 500
-        
-    # 3. Supprimer l'ID de session pour empêcher le retour
-    session.pop('voter_id', None)
-    
-    return jsonify({'success': True, 'block_index': new_block.index}), 200
-
-# --- API d'Administration ---
-
-@app.route('/api/admin/toggle_status', methods=['POST'])
-@admin_required
-def toggle_status():
-    global ELECTION_STATUS, RESULTS_VISIBLE
+@app.route('/api/admin/candidate_action/<int:candidate_id>', methods=['POST'])
+@login_required
+def api_admin_candidate_action(candidate_id):
+    """API pour valider ou supprimer un candidat."""
     data = request.get_json()
     action = data.get('action')
-
-    try:
-        if action == 'start_vote':
-            ELECTION_STATUS = 'VOTING'
-            RESULTS_VISIBLE = True
-            message = "Vote démarré et résultats visibles."
-        elif action == 'pause_vote':
-            ELECTION_STATUS = 'PENDING'
-            message = "Vote mis en pause."
-        elif action == 'end_vote':
-            ELECTION_STATUS = 'FINISHED'
-            message = "Vote terminé."
-        elif action == 'show_results':
-            RESULTS_VISIBLE = True
-            message = "Résultats rendus visibles."
-        elif action == 'hide_results':
-            RESULTS_VISIBLE = False
-            message = "Résultats cachés."
-        else:
-            return jsonify({'error': 'Action invalide.'}), 400
-
-        # Enregistrement de l'action dans la blockchain (à l'exception de show/hide results)
-        if action in ['start_vote', 'pause_vote', 'end_vote']:
-            mine_block(data={'action': action.upper()})
-        
-        return jsonify({'success': message}), 200
-
-    except Exception as e:
-        logging.error(f"Erreur lors du changement de statut: {e}")
-        return jsonify({'error': 'Erreur interne lors de la mise à jour du statut.'}), 500
-
-@app.route('/api/admin/candidate_action/<candidate_id>', methods=['POST'])
-@admin_required
-def candidate_action(candidate_id):
-    data = request.get_json()
-    action = data.get('action')
-
-    candidate = Candidate.query.filter_by(candidate_id=candidate_id).first()
+    
+    candidate = Candidate.query.get(candidate_id)
     if not candidate:
-        return jsonify({'error': 'Candidat introuvable.'}), 404
-
-    try:
-        if action == 'validate':
-            candidate.is_approved = True
-            db.session.commit()
+        return jsonify({'error': 'Candidat non trouvé.'}), 404
+        
+    if action == 'validate':
+        if candidate.is_validated:
+            return jsonify({'error': 'Ce candidat est déjà validé.'}), 400
             
-            mine_block(data={'action': 'CANDIDATE_APPROVED', 'candidate_id': candidate_id})
-            message = f"Candidat {candidate.name} validé avec succès."
-            
-        elif action == 'delete':
-            # Supprimer la photo
-            if candidate.photo_path and os.path.exists(candidate.photo_path):
-                os.remove(candidate.photo_path)
+        candidate.is_validated = True
+        db.session.commit()
+        
+        # Enregistrement dans la blockchain
+        block_data = {
+            'candidate_id': candidate.id,
+            'nom_complet': f"{candidate.prenom} {candidate.nom}",
+            'parcours': candidate.parcours,
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+        add_block(block_data, 'CANDIDATE_VALIDATED')
+        
+        return jsonify({'success': f"Candidat {candidate_id} validé et ajouté à la Blockchain."}), 200
+        
+    elif action == 'delete':
+        
+        # Tentative de suppression de la photo associée
+        if candidate.photo_filename:
+            filepath = os.path.join(app.config['UPLOAD_FOLDER'], candidate.photo_filename)
+            if os.path.exists(filepath):
+                os.remove(filepath)
                 
-            db.session.delete(candidate)
-            db.session.commit()
+        db.session.delete(candidate)
+        db.session.commit()
+        
+        # Pas de bloc blockchain pour la suppression (action administrative non liée au vote)
+        
+        return jsonify({'success': f"Candidat {candidate_id} et sa photo supprimés."}), 200
+        
+    else:
+        return jsonify({'error': 'Action non valide.'}), 400
+
+@app.route('/api/admin/election_status', methods=['POST'])
+@login_required
+def api_admin_election_status():
+    """API pour changer l'état de l'élection."""
+    data = request.get_json()
+    status = data.get('status')
+    
+    status_obj = get_election_status()
+    
+    if status in [STATUS_PENDING, STATUS_VOTING, STATUS_FINISHED]:
+        status_obj.status = status
+        db.session.commit()
+        
+        # Enregistrement dans la blockchain si c'est une action majeure
+        if status == STATUS_VOTING:
+            add_block({'status': 'OUVERTURE DU VOTE'}, 'STATUS_UPDATE')
+        elif status == STATUS_FINISHED:
+            add_block({'status': 'CLÔTURE DU VOTE'}, 'STATUS_UPDATE')
             
-            mine_block(data={'action': 'CANDIDATE_DELETED', 'candidate_id': candidate_id})
-            message = f"Candidat {candidate.name} supprimé avec succès."
-            
-        else:
-            return jsonify({'error': 'Action invalide.'}), 400
+        return jsonify({'success': f"Statut de l'élection mis à jour à {status}."}), 200
+    else:
+        return jsonify({'error': 'Statut non valide.'}), 400
 
-        return jsonify({'success': message}), 200
+@app.route('/api/admin/results_visibility', methods=['POST'])
+@login_required
+def api_admin_results_visibility():
+    """API pour masquer/afficher les résultats."""
+    data = request.get_json()
+    action = data.get('action')
+    
+    status_obj = get_election_status()
+    
+    if action == 'show':
+        status_obj.results_visible = True
+        message = "Les résultats sont maintenant publics."
+    elif action == 'hide':
+        status_obj.results_visible = False
+        message = "Les résultats sont maintenant cachés."
+    else:
+        return jsonify({'error': 'Action non valide.'}), 400
+        
+    db.session.commit()
+    return jsonify({'success': message}), 200
 
-    except Exception as e:
-        db.session.rollback()
-        logging.error(f"Erreur lors de l'action sur le candidat: {e}")
-        return jsonify({'error': 'Erreur interne lors de l\'opération.'}), 500
+# --- POINT D'ENTRÉE PRINCIPAL (ADAPTÉ POUR RENDER) ---
 
-# --- COMMANDES CLI POUR LE DÉPLOIEMENT ---
-
-@app.cli.command("initdb")
-def initdb_command():
-    """Crée les tables de la base de données et insère les données initiales (Admin, Genesis)."""
-    init_db()
-    print("Base de données initialisée avec succès.")
-
-# Pour Render, vous utiliserez 'gunicorn serveur_vote:app' comme commande de démarrage
-# et 'python serveur_vote.py initdb' comme Build Command ou une commande séparée pour l'initialisation.
-
+# Le bloc __main__ est désormais simplifié pour la production sur Render.
+# L'initialisation se fait via la commande CLI `python serveur_vote.py initdb`
+# lors du Build Command sur Render.
 if __name__ == '__main__':
-    # Initialisation de la base de données (pour le développement local)
-    init_db() 
-    # Le 'host=0.0.0.0' est essentiel pour le déploiement sur Render ou Docker
-    app.run(debug=True, host='0.0.0.0', port=os.environ.get('PORT', 5000))
+    # Initialisation locale de la base de données si elle n'existe pas
+    # Attention: cela utilisera un fichier SQLite local si DATABASE_URL n'est pas configuré.
+    # Pour Render, ceci est géré par la commande Build.
+    with app.app_context():
+        # Tentative d'initialisation (gère les cas où les tables existent déjà)
+        init_db()
+        
+    # Lance l'application en mode debug pour le développement local
+    # En production, Gunicorn prend le relais
+    app.run(debug=True)

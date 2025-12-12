@@ -1,7 +1,8 @@
 Flask
 werkzeug
-gunicorn  # Nécessaire pour servir l'application Flask en production
-pandas    # Car vous l'avez importé dans serveur_vote.py
-openpyxl  # Probablement nécessaire pour lire les fichiers Excel (si utilisé par pandas)
-Flask-SQLAlchemy # Nouveau : ORM pour Flask
-psycopg2-binary # Nouveau : Pilote PostgreSQL
+gunicorn
+pandas
+openpyxl
+Flask-SQLAlchemy
+psycopg2-binary
+click

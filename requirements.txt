@@ -3,6 +3,5 @@ werkzeug
 gunicorn
 pandas
 openpyxl
-Flask-SQLAlchemy
 psycopg2-binary
 click
